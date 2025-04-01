@@ -2,17 +2,19 @@ from fastapi import FastAPI, Depends, HTTPException, File, UploadFile, Form, sta
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.datastructures import UploadFile as StarletteUploadFile
 import os
 import shutil
 import sys
 from typing import List, Dict, Optional
 from sqlalchemy.orm import Session
 import json
+import uvicorn
 
 # Handle both local development and Docker environment imports
 try:
     # Try Docker path first
-    from app.models import client, pdf_template, database
+    from app.models import client, pdf_template, database, tenant
     from app.models.database import get_db, engine
     from app.schemas import client as client_schema
     from app.schemas import pdf_template as pdf_schema
@@ -20,23 +22,37 @@ try:
     print("Using Docker import paths")
 except ImportError:
     # Fall back to local development paths
-    from models import client, pdf_template, database
+    from models import client, pdf_template, database, tenant
     from models.database import get_db, engine
     from schemas import client as client_schema
     from schemas import pdf_template as pdf_schema
     from services.pdf_service import PDFService
     print("Using local import paths")
 
-# Create database tables
-client.Base.metadata.create_all(bind=engine)
-pdf_template.Base.metadata.create_all(bind=engine)
+# NOTE: No longer creating tables directly - using Alembic for migrations
+# Tables will be created by running alembic upgrade head
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="Financial Advisor PDF Automation",
+    title="DocuMantis PDF Automation",
     description="API for managing client data and automating PDF form filling",
     version="1.0.0"
 )
+
+# Override FastAPI's default UploadFile max size (increase to 50MB)
+# This is a monkey patch to allow larger file uploads
+def _get_with_increased_limit():
+    orig_init = StarletteUploadFile.__init__
+
+    def new_init(self, *args, **kwargs):
+        if "max_size" in kwargs:
+            kwargs["max_size"] = 50 * 1024 * 1024  # 50MB
+        orig_init(self, *args, **kwargs)
+
+    StarletteUploadFile.__init__ = new_init
+
+# Apply the monkey patch
+_get_with_increased_limit()
 
 # Initialize PDF service
 pdf_service = PDFService()
@@ -59,32 +75,70 @@ app.mount("/downloads", StaticFiles(directory="./data/generated_pdfs"), name="do
 @app.get("/health")
 def health_check():
     """Health check endpoint for Docker."""
-    return {"status": "healthy"}
+    return {"status": "healthy", "database": "PostgreSQL"}
 
 # Root endpoint
 @app.get("/")
 def read_root():
     """Root endpoint."""
-    return {"message": "Financial Advisor PDF Automation API"}
+    return {"message": "DocuMantis PDF Automation API"}
+
+# Tenant routes
+@app.post("/tenants/", response_model=dict)
+def create_tenant(tenant_data: dict, db: Session = Depends(get_db)):
+    """Create a new tenant."""
+    db_tenant = tenant.Tenant(
+        name=tenant_data.get("name"),
+        slug=tenant_data.get("slug"),
+        is_active=True
+    )
+    db.add(db_tenant)
+    db.commit()
+    db.refresh(db_tenant)
+    return {"id": db_tenant.id, "name": db_tenant.name, "slug": db_tenant.slug}
+
+@app.get("/tenants/")
+def get_tenants(db: Session = Depends(get_db)):
+    """Get all tenants."""
+    tenants = db.query(tenant.Tenant).all()
+    return [{"id": t.id, "name": t.name, "slug": t.slug, "is_active": t.is_active} for t in tenants]
 
 # Client routes
 @app.post("/clients/", response_model=client_schema.Client, status_code=status.HTTP_201_CREATED)
-def create_client(client_data: client_schema.ClientCreate, db: Session = Depends(get_db)):
+def create_client(client_data: client_schema.ClientCreate, tenant_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Create a new client."""
-    db_client = db.query(client.Client).filter(client.Client.id_number == client_data.id_number).first()
+    # Check if client with same ID number exists in the same tenant
+    query = db.query(client.Client).filter(client.Client.id_number == client_data.id_number)
+    if tenant_id:
+        query = query.filter(client.Client.tenant_id == tenant_id)
+    
+    db_client = query.first()
     if db_client:
         raise HTTPException(status_code=400, detail="Client with this ID number already exists")
     
-    db_client = client.Client(**client_data.model_dump())
+    # Create client data dictionary
+    client_dict = client_data.model_dump()
+    
+    # Add tenant_id if provided
+    if tenant_id:
+        client_dict["tenant_id"] = tenant_id
+    
+    db_client = client.Client(**client_dict)
     db.add(db_client)
     db.commit()
     db.refresh(db_client)
     return db_client
 
 @app.get("/clients/", response_model=List[client_schema.Client])
-def get_clients(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    """Get all clients."""
-    clients = db.query(client.Client).offset(skip).limit(limit).all()
+def get_clients(skip: int = 0, limit: int = 100, tenant_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Get all clients, optionally filtered by tenant."""
+    query = db.query(client.Client)
+    
+    # Filter by tenant if specified
+    if tenant_id:
+        query = query.filter(client.Client.tenant_id == tenant_id)
+        
+    clients = query.offset(skip).limit(limit).all()
     return clients
 
 @app.get("/clients/{client_id}", response_model=client_schema.Client)
@@ -128,6 +182,7 @@ async def create_pdf_template(
     name: str = Form(...),
     description: Optional[str] = Form(None),
     file: UploadFile = File(...),
+    tenant_id: Optional[int] = Form(None),
     db: Session = Depends(get_db)
 ):
     """Upload a new PDF template."""
@@ -153,7 +208,8 @@ async def create_pdf_template(
             name=name,
             description=description,
             file_path=file_path,
-            field_mappings={}  # Initially empty, will be set through mapping endpoint
+            field_mappings={},  # Initially empty, will be set through mapping endpoint
+            tenant_id=tenant_id
         )
         
         db.add(db_template)
@@ -171,9 +227,15 @@ async def create_pdf_template(
         raise HTTPException(status_code=500, detail=f"Failed to process PDF template: {str(e)}")
 
 @app.get("/pdf-templates/", response_model=List[pdf_schema.PDFTemplate])
-def get_pdf_templates(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    """Get all PDF templates."""
-    templates = db.query(pdf_template.PDFTemplate).offset(skip).limit(limit).all()
+def get_pdf_templates(skip: int = 0, limit: int = 100, tenant_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Get all PDF templates, optionally filtered by tenant."""
+    query = db.query(pdf_template.PDFTemplate)
+    
+    # Filter by tenant if specified
+    if tenant_id:
+        query = query.filter(pdf_template.PDFTemplate.tenant_id == tenant_id)
+        
+    templates = query.offset(skip).limit(limit).all()
     return templates
 
 @app.get("/pdf-templates/{template_id}", response_model=pdf_schema.PDFTemplate)
@@ -258,6 +320,10 @@ def generate_pdf(
         if db_template is None:
             raise HTTPException(status_code=404, detail="PDF template not found")
         
+        # Check if client and template belong to the same tenant if both have tenant_id
+        if db_client.tenant_id and db_template.tenant_id and db_client.tenant_id != db_template.tenant_id:
+            raise HTTPException(status_code=400, detail="Client and template belong to different tenants")
+        
         # Convert client to dictionary in a more robust way
         client_data = {}
         for column in client.Client.__table__.columns:
@@ -320,5 +386,4 @@ def download_generated_pdf(generated_pdf_id: int, db: Session = Depends(get_db))
     )
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True) 
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

@@ -35,5 +35,5 @@ RUN chmod +x ./app/entrypoint.sh
 # Expose the port that the application will run on
 EXPOSE 8001
 
-# Use the entrypoint script with production flag
-ENTRYPOINT ["./app/entrypoint.sh", "prod"]
+# Use the entrypoint script
+ENTRYPOINT ["./app/entrypoint.sh"]

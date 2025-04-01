@@ -53,11 +53,13 @@ class ClientUpdate(BaseModel):
     occupation: Optional[str] = None
     income: Optional[str] = None
     is_active: Optional[bool] = None
+    tenant_id: Optional[int] = None
 
 class Client(ClientBase):
     id: int
     is_active: bool
+    tenant_id: Optional[int] = None
     
     model_config = {
         "from_attributes": True
-    } 
+    }

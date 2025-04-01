@@ -8,13 +8,14 @@ class PDFTemplateBase(BaseModel):
     field_mappings: Dict[str, str] = {}
 
 class PDFTemplateCreate(PDFTemplateBase):
-    pass
+    tenant_id: Optional[int] = None
 
 class PDFTemplateUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     field_mappings: Optional[Dict[str, str]] = None
     is_active: Optional[bool] = None
+    tenant_id: Optional[int] = None
 
 class PDFTemplate(PDFTemplateBase):
     id: int
@@ -22,6 +23,7 @@ class PDFTemplate(PDFTemplateBase):
     created_at: datetime
     updated_at: datetime
     is_active: bool
+    tenant_id: Optional[int] = None
     
     model_config = {
         "from_attributes": True
@@ -66,4 +68,4 @@ class FieldCategory(BaseModel):
 class FieldCategoryMap(BaseModel):
     """Mapping of field categories to client data fields"""
     categories: Dict[str, List[str]]
-    mappings: Dict[str, str] 
+    mappings: Dict[str, str]

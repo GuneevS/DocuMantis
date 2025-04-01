@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "Starting PDFeck backend container..."
+echo "Starting DocuMantis backend container..."
 
 # Display system information for debugging
 echo "Container environment:"
@@ -9,7 +9,6 @@ echo "======================"
 echo "Python version: $(python --version)"
 echo "Python path: $PYTHONPATH"
 echo "Current directory: $(pwd)"
-echo "Directory contents: $(ls -la)"
 echo "======================"
 
 # Create necessary directories
@@ -20,14 +19,18 @@ mkdir -p /app/data/pdf_templates /app/data/generated_pdfs
 echo "Setting directory permissions..."
 chmod -R 777 /app/data
 
-# Check for connectivity to other services
-echo "Checking network connectivity..."
-echo "   - Host networking: $(hostname -I || echo 'Not available')"
-echo "   - DNS resolution: $(cat /etc/resolv.conf || echo 'Not available')"
+# Wait for PostgreSQL to be ready
+echo "Waiting for PostgreSQL to be ready..."
+until pg_isready -h $DB_HOST -p $DB_PORT -U $DB_USER; do
+    echo "PostgreSQL is unavailable - sleeping"
+    sleep 2
+done
+echo "PostgreSQL is up and running"
 
-# Wait for any required services (if we add database services later)
-echo "Starting PDFeck backend service..."
+# Run database migrations - using the full path
+echo "Running database migrations..."
+cd /app && python -m alembic.config -c /app/app/alembic.ini upgrade head
 
-# Run the application with the proper Python path
+# Start the application with increased timeout
 echo "Launching uvicorn server..."
-exec python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload --log-level debug 
+exec python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload --log-level debug --limit-concurrency 100 --timeout-keep-alive 120

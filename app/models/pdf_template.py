@@ -19,8 +19,15 @@ class PDFTemplate(Base):
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
     is_active = Column(Boolean, default=True)
     
+    # Tenant relationship
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True)  # Nullable for backward compatibility
+    tenant = relationship("Tenant", back_populates="templates")
+    
     # Relationship with generated PDFs
     generated_pdfs = relationship("GeneratedPDF", back_populates="template")
+    
+    def __repr__(self):
+        return f"<PDFTemplate(id={self.id}, name='{self.name}')>"
 
 class GeneratedPDF(Base):
     __tablename__ = "generated_pdfs"
@@ -36,4 +43,7 @@ class GeneratedPDF(Base):
     
     # Relationships
     client = relationship("Client", back_populates="pdfs")
-    template = relationship("PDFTemplate", back_populates="generated_pdfs") 
+    template = relationship("PDFTemplate", back_populates="generated_pdfs")
+    
+    def __repr__(self):
+        return f"<GeneratedPDF(id={self.id}, client_id={self.client_id}, template_id={self.template_id})>"

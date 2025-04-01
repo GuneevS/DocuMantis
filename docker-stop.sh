@@ -1,18 +1,17 @@
 #!/bin/bash
 
-# Colors for output
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# Determine which compose file to use
+if [ -f "docker-compose.override.yml" ]; then
+    COMPOSE_FILE="docker-compose.override.yml"
+elif [ -f ".env" ] && grep -q "PRODUCTION=true" .env; then
+    COMPOSE_FILE="docker-compose.prod.yml"
+else
+    COMPOSE_FILE="docker-compose.yml"
+fi
 
-echo -e "${GREEN}DocuMantis Docker Stop Script${NC}"
-echo -e "${BLUE}-------------------------${NC}"
+echo "Stopping DocuMantis containers using $COMPOSE_FILE..."
 
-echo -e "${BLUE}Stopping containers...${NC}"
-docker-compose -f docker-compose.prod.yml down
+# Stop containers
+docker-compose -f $COMPOSE_FILE down
 
-echo -e "${GREEN}All containers stopped.${NC}"
-
-# Show status 
-echo -e "${BLUE}Container status:${NC}"
-docker ps | grep documantis 
+echo "DocuMantis has been stopped."

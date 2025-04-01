@@ -1,90 +1,64 @@
 #!/bin/bash
 
-# Colors for output
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[0;33m'
-RED='\033[0;31m'
-NC='\033[0m' # No Color
+echo "Starting DocuMantis in development mode..."
 
-echo -e "${GREEN}DocuMantis Docker Development Starter${NC}"
-echo -e "${BLUE}--------------------------------${NC}"
+# Create Dockerfile.backend for development if it doesn't exist
+if [ ! -f "Dockerfile.backend" ]; then
+    echo "Creating Dockerfile.backend..."
+    cat > Dockerfile.backend <<EOL
+FROM python:3.11-slim
 
-# Check Docker daemon status
-if ! docker info > /dev/null 2>&1; then
-    echo -e "${RED}Error: Docker is not running. Please start Docker and try again.${NC}"
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && \\
+    apt-get install -y --no-install-recommends \\
+    build-essential \\
+    curl \\
+    postgresql-client && \\
+    apt-get clean && \\
+    rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY app/ ./app/
+
+# Create necessary directories
+RUN mkdir -p ./data/pdf_templates ./data/generated_pdfs
+
+# Set environment variables
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
+# Make entrypoint script executable
+RUN chmod +x ./app/entrypoint.sh
+
+# Expose port
+EXPOSE 8001
+
+# Use entrypoint script
+ENTRYPOINT ["./app/entrypoint.sh"]
+EOL
+    chmod +x Dockerfile.backend
+fi
+
+# Check if docker-compose.yml exists
+if [ ! -f "docker-compose.yml" ]; then
+    echo "docker-compose.yml not found. Please create it first."
     exit 1
 fi
 
-# Stop any existing containers
-echo -e "${BLUE}Stopping any existing containers...${NC}"
-docker-compose down
+# Build and start containers
+docker-compose up -d --build
 
-# Create data directories with proper permissions
-echo -e "${BLUE}Setting up data directories...${NC}"
-mkdir -p data/pdf_templates data/generated_pdfs
-chmod -R 777 data
-
-# Use BuildKit for faster builds
-export DOCKER_BUILDKIT=1
-export COMPOSE_DOCKER_CLI_BUILD=1
-
-# Build and start the backend first for better debugging
-echo -e "${BLUE}Building and starting backend...${NC}"
-docker-compose up -d --build backend
-
-# Wait for backend to be healthy
-echo -e "${YELLOW}Waiting for backend to start (this may take a moment)...${NC}"
-ATTEMPTS=0
-MAX_ATTEMPTS=30
-BACKEND_HEALTHY=false
-
-while [ $ATTEMPTS -lt $MAX_ATTEMPTS ]; do
-    ATTEMPTS=$((ATTEMPTS+1))
-    
-    if docker ps | grep "documantis-backend" | grep "(healthy)" > /dev/null; then
-        BACKEND_HEALTHY=true
-        break
-    fi
-    
-    if [ $ATTEMPTS -eq 1 ]; then
-        echo -e "${BLUE}Showing backend logs while waiting:${NC}"
-        docker-compose logs backend
-    fi
-    
-    echo -e "${YELLOW}Attempt $ATTEMPTS/$MAX_ATTEMPTS - Backend not healthy yet, waiting 2 seconds...${NC}"
-    sleep 2
-done
-
-if [ "$BACKEND_HEALTHY" = true ]; then
-    echo -e "${GREEN}Backend started successfully!${NC}"
-    # Start the frontend
-    echo -e "${BLUE}Starting frontend...${NC}"
-    docker-compose up -d frontend
-    
-    echo -e "${GREEN}All containers started!${NC}"
-    echo -e "${BLUE}Frontend: http://localhost${NC}"
-    echo -e "${BLUE}Backend API: http://localhost:8001${NC}"
-    echo -e "${BLUE}API Documentation: http://localhost:8001/docs${NC}"
-else
-    echo -e "${RED}Backend failed to start in time. Checking logs:${NC}"
-    docker-compose logs backend
-    echo -e "${YELLOW}You may want to try running:${NC}"
-    echo -e "${YELLOW}docker-compose logs backend${NC}"
-    exit 1
-fi
-
-# Show container status
-echo -e "${BLUE}Container status:${NC}"
-docker-compose ps
-
-# Ask user if they want to see logs
-echo -e "${YELLOW}Do you want to see container logs? (y/n)${NC}"
-read -r response
-if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
-    echo -e "${BLUE}Showing logs (press Ctrl+C to exit)...${NC}"
-    docker-compose logs -f
-else
-    echo -e "${BLUE}You can view logs anytime with:${NC}"
-    echo -e "docker-compose logs -f"
-fi 
+echo "DocuMantis is starting..."
+echo "Frontend will be available at: http://localhost"
+echo "API will be available at: http://localhost:8001"
+echo "API documentation will be available at: http://localhost:8001/docs"
+echo ""
+echo "Use './docker-stop.sh' to stop the application"
